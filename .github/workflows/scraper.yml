@@ -1,6 +1,6 @@
 name: Data Scraper Matrix
 
-#on:
+on:
   #schedule:
   #  - cron: '*/50 * * * *'
   workflow_dispatch:
