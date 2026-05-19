@@ -39,7 +39,7 @@ else:
     T_L = W_H
 
 def g_t():
-    return datetime.now(TZ).isoformat()
+    return datetime.now(TZ).strftime("%Y-%m-%d %H:%M:%S")
 
 def g_max(m_y):
     rs = db.table("cases").select("case_num").eq("month_year", m_y).in_("status", [cfg.get("TXT_OPEN"), cfg.get("TXT_CLOSED")]).order("case_num", desc=True).limit(1).execute()
