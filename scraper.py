@@ -10,7 +10,7 @@ from playwright.sync_api import sync_playwright
 sys.stdout.reconfigure(encoding='utf-8')
 
 W_ID = int(os.environ.get("WORKER_ID", "0"))
-M_TIME = 30 * 60 
+M_TIME = 45 * 60 
 TZ = zoneinfo.ZoneInfo("Asia/Jerusalem")
 
 try:
