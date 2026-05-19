@@ -144,17 +144,29 @@ def p_res(itm, suc, blk, dt):
                 db.table("case_history").insert({"case_id": cid, "check_time": nw, "version_num": nv - 1, "is_changed": False, "data_json": {}}).execute()
 
 def r_main():
-    print(f"Worker {W_ID} starting role {R}...")
-    rps = g_fwd(True) if R == "C" else (g_fwd(False) if R == "F" else g_hst())
-    if not rps: return
+    print(f"W_ID {W_ID} - {R} init...")
+    try:
+        rps = g_fwd(True) if R == "C" else (g_fwd(False) if R == "F" else g_hst())
+    except Exception as e:
+        print(f"Err g: {repr(e)}")
+        return
+        
+    if not rps: 
+        print("No trgs")
+        return
 
+    print(f"Found {len(rps)} trgs")
     st = time.time()
     with sync_playwright() as p:
-        br = p.chromium.launch(headless=True, args=["--disable-blink-features=AutomationControlled"])
-        cx = br.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36", viewport={"width": 1920, "height": 1080})
-        cx.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
-        pg = cx.new_page()
-        pg.set_default_navigation_timeout(60000)
+        try:
+            br = p.chromium.launch(headless=True, args=["--disable-blink-features=AutomationControlled"])
+            cx = br.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36", viewport={"width": 1920, "height": 1080})
+            cx.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+            pg = cx.new_page()
+            pg.set_default_navigation_timeout(60000)
+        except Exception as e:
+            print(f"Err br: {repr(e)}")
+            return
         
         try:
             pg.goto(cfg["TARGET_URL"])
@@ -207,13 +219,22 @@ def r_main():
                             for pt in json.loads(pjs):
                                 sd[f7].append({f8: pt.get(ak3, ""), f9: pt.get(ak4, ""), f10: pt.get(ak5, "")})
                         suc = True
-                except: pass
+                except Exception: 
+                    pass
 
-                p_res(itm, suc, blk, sd)
-                pg.goto(cfg["TARGET_URL"])
+                try:
+                    p_res(itm, suc, blk, sd)
+                except Exception as e_pres:
+                    print(f"Err p_res: {repr(e_pres)}")
+                
+                try:
+                    pg.goto(cfg["TARGET_URL"])
+                except: pass
                 time.sleep(1)
-        except: pass
-        finally: br.close()
+        except Exception as em:
+            print(f"Err main loop: {repr(em)}")
+        finally: 
+            br.close()
 
 if __name__ == "__main__":
     r_main()
