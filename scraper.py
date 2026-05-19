@@ -16,7 +16,8 @@ TZ = zoneinfo.ZoneInfo("Asia/Jerusalem")
 try:
     cfg = json.loads(os.environ.get("APP_SECRET", "{}"))
     db: Client = create_client(cfg["SUPABASE_URL"], cfg["SUPABASE_KEY"])
-except:
+except Exception as e:
+    print(f"INIT ERROR: {repr(e)}")
     sys.exit(1)
 
 r_cfg = cfg.get("WORKER_ROLES", {"CURRENT_MONTH": 5, "FORWARD_OLD": 10, "HISTORY_UPDATE": 5})
@@ -143,6 +144,7 @@ def p_res(itm, suc, blk, dt):
                 db.table("case_history").insert({"case_id": cid, "check_time": nw, "version_num": nv - 1, "is_changed": False, "data_json": {}}).execute()
 
 def r_main():
+    print(f"Worker {W_ID} starting role {R}...")
     rps = g_fwd(True) if R == "C" else (g_fwd(False) if R == "F" else g_hst())
     if not rps: return
 
