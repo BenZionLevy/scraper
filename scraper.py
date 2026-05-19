@@ -99,6 +99,9 @@ def p_res(itm, suc, blk, dt):
     isc = itm['m_y'] == cfg.get("CURRENT_MONTH_STR")
     f5 = cfg.get("F_5", "v5")
     
+    # חישוב מפתח מיון: שנה (2 תווים) + חודש (2 תווים) + מספר תיק מרופד ב-5 אפסים
+    sk = int(f"{itm['m_y'][2:]}{itm['m_y'][:2]}{itm['c_num']:05d}")
+    
     if R in ["C", "F"]: 
         if suc:
             st = dt.get(f5, to)
@@ -114,7 +117,7 @@ def p_res(itm, suc, blk, dt):
         
         if st == te: return 
         
-        d = {"case_id": cid, "case_num": itm['c_num'], "month_year": itm['m_y'], "status": st, "data_json": dt if suc else {}, "last_checked": nw}
+        d = {"case_id": cid, "case_num": itm['c_num'], "month_year": itm['m_y'], "status": st, "data_json": dt if suc else {}, "last_checked": nw, "sort_key": sk}
         db.table("cases").upsert(d).execute()
 
     else: 
@@ -125,7 +128,7 @@ def p_res(itm, suc, blk, dt):
             if ost == tpd and not blk:
                 mr = g_max(itm['m_y'])
                 if mr - itm['c_num'] >= gl:
-                    db.table("cases").update({"status": tp, "last_checked": nw}).eq("case_id", cid).execute()
+                    db.table("cases").update({"status": tp, "last_checked": nw, "sort_key": sk}).eq("case_id", cid).execute()
             return 
         
         ojn = orw.get("data_json", {})
@@ -135,10 +138,10 @@ def p_res(itm, suc, blk, dt):
         nst = dt.get(f5, to)
         
         if ost == tpd:
-            db.table("cases").update({"data_json": dt, "status": nst, "last_checked": nw}).eq("case_id", cid).execute()
+            db.table("cases").update({"data_json": dt, "status": nst, "last_checked": nw, "sort_key": sk}).eq("case_id", cid).execute()
         else:
             if chg:
-                db.table("cases").update({"data_json": dt, "status": nst, "last_checked": nw}).eq("case_id", cid).execute()
+                db.table("cases").update({"data_json": dt, "status": nst, "last_checked": nw, "sort_key": sk}).eq("case_id", cid).execute()
                 db.table("case_history").insert({"case_id": cid, "check_time": nw, "version_num": nv, "is_changed": True, "data_json": dt}).execute()
             else:
                 db.table("case_history").insert({"case_id": cid, "check_time": nw, "version_num": nv - 1, "is_changed": False, "data_json": {}}).execute()
