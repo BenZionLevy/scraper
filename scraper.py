@@ -10,7 +10,7 @@ except Exception as e:
     print(f"INIT ERROR: {repr(e)}")
     sys.exit(1)
 
-W_ID = int(os.environ.get("W_ID", "0"))
+W_ID = int(os.environ.get("WORKER_ID", "0"))
 WR = cfg.get("WORKER_ROLES", {"CURRENT_MONTH": 5, "FORWARD_OLD": 10, "HISTORY_UPDATE": 5})
 CR = WR.get("CURRENT_MONTH", 5)
 FW = WR.get("FORWARD_OLD", 10)
