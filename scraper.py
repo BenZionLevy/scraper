@@ -138,15 +138,18 @@ def p_res(itm, suc, blk, dt):
 
 def r_main():
     run_stats = {"total": 0, "success": 0, "error": 0, "details": {}}
+    consecutive_errors = 0
     
     try:
         rps = g_fwd(True) if R == "C" else (g_fwd(False) if R == "F" else g_hst())
     except Exception as e:
-        db.table("run_logs").insert({"worker_id": W_ID, "role": R, "total_checked": 0, "success_count": 0, "error_count": 1, "errors_detail": {"INIT_ERR": str(e)[:50]}}).execute()
+        try: db.table("run_logs").insert({"worker_id": W_ID, "role": R, "total_checked": 0, "success_count": 0, "error_count": 1, "errors_detail": {"INIT_ERR": str(e)[:50]}}).execute()
+        except: pass
         return
         
     if not rps: 
-        db.table("run_logs").insert({"worker_id": W_ID, "role": R, "total_checked": 0, "success_count": 0, "error_count": 0, "errors_detail": {"msg": "No targets"}}).execute()
+        try: db.table("run_logs").insert({"worker_id": W_ID, "role": R, "total_checked": 0, "success_count": 0, "error_count": 0, "errors_detail": {"msg": "No targets"}}).execute()
+        except: pass
         return
 
     st = time.time()
@@ -172,6 +175,10 @@ def r_main():
                 
                 for itm in rps:
                     if time.time() - st > M_TIME: break
+                    if consecutive_errors >= 5:
+                        run_stats["details"]["EARLY_EXIT_BLOCK"] = 1
+                        break
+                        
                     run_stats["total"] += 1
                     suc = False
                     blk = False
@@ -185,9 +192,11 @@ def r_main():
                         try:
                             pg.wait_for_selector(cfg["STORE_ID"], state="attached", timeout=15000)
                         except Exception as we:
-                            pt = pg.content()
-                            if err_msg_text in pt:
-                                blk = True
+                            try:
+                                pt = pg.content()
+                                if err_msg_text in pt:
+                                    blk = True
+                            except: pass
                             raise we
 
                         try:
@@ -214,10 +223,14 @@ def r_main():
                                     sd[f7].append({f8: pt.get(ak3, ""), f9: pt.get(ak4, ""), f10: pt.get(ak5, "")})
                             suc = True
                             run_stats["success"] += 1
+                            consecutive_errors = 0
                             
                     except Exception as eloop:
-                        if not blk:
+                        if blk:
+                            consecutive_errors = 0
+                        else:
                             run_stats["error"] += 1
+                            consecutive_errors += 1
                             err_name = type(eloop).__name__
                             run_stats["details"][err_name] = run_stats["details"].get(err_name, 0) + 1
 
