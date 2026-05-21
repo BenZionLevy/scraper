@@ -7,6 +7,7 @@ try:
     cfg = json.loads(os.environ.get("APP_SECRET", "{}"))
     db: Client = create_client(cfg["SUPABASE_URL"], cfg["SUPABASE_KEY"])
 except Exception as e:
+    print(f"INIT ERROR: {e}")
     sys.exit(1)
 
 W_ID = int(os.environ.get("WORKER_ID", "0"))
@@ -14,7 +15,7 @@ WR = cfg.get("WORKER_ROLES", {"CURRENT_MONTH": 5, "FORWARD_OLD": 10, "HISTORY_UP
 CR = WR.get("CURRENT_MONTH", 5)
 FW = WR.get("FORWARD_OLD", 10)
 R = "C" if W_ID < CR else ("F" if W_ID < CR + FW else "H")
-M_TIME = 30 * 60
+M_TIME = 3 * 60
 
 def g_t():
     return datetime.now(timezone(timedelta(hours=3))).strftime("%Y-%m-%d %H:%M:%S")
@@ -137,17 +138,16 @@ def p_res(itm, suc, blk, dt):
 
 def r_main():
     run_stats = {"total": 0, "success": 0, "error": 0, "details": {}}
+    consecutive_errors = 0
     
     try:
         rps = g_fwd(True) if R == "C" else (g_fwd(False) if R == "F" else g_hst())
     except Exception as e:
-        try: db.table("run_logs").insert({"worker_id": W_ID, "role": R, "total_checked": 0, "success_count": 0, "error_count": 1, "errors_detail": {"INIT_ERR": str(e)[:50]}}).execute()
-        except: pass
+        print(f"Worker {W_ID} Init DB Error: {e}", flush=True)
         return
         
     if not rps: 
-        try: db.table("run_logs").insert({"worker_id": W_ID, "role": R, "total_checked": 0, "success_count": 0, "error_count": 0, "errors_detail": {"msg": "No targets"}}).execute()
-        except: pass
+        print(f"Worker {W_ID}: No targets to check. Exiting.", flush=True)
         return
 
     st = time.time()
@@ -173,6 +173,10 @@ def r_main():
                 
                 for itm in rps:
                     if time.time() - st > M_TIME: break
+                    if consecutive_errors >= 5:
+                        print(f"Worker {W_ID}: 5 consecutive errors. Stopping to save log.", flush=True)
+                        break
+                        
                     run_stats["total"] += 1
                     print(f"Worker {W_ID} checking case {itm['c_num']} (Month: {itm['m_y']})", flush=True)
                     suc = False
@@ -191,6 +195,7 @@ def r_main():
                                 pt = pg.content()
                                 if err_msg_text in pt:
                                     blk = True
+                                    print(f"Worker {W_ID}: Case {itm['c_num']} identified as NOT FOUND (Blocked/Privileged).", flush=True)
                             except: pass
                             raise we
                         
@@ -218,16 +223,23 @@ def r_main():
                                     sd[f7].append({f8: pt.get(ak3, ""), f9: pt.get(ak4, ""), f10: pt.get(ak5, "")})
                             suc = True
                             run_stats["success"] += 1
+                            consecutive_errors = 0
+                            print(f"Worker {W_ID}: Case {itm['c_num']} processed SUCCESS.", flush=True)
                             
                     except Exception as eloop:
-                        if not blk:
+                        if blk:
+                            consecutive_errors = 0
+                        else:
                             run_stats["error"] += 1
+                            consecutive_errors += 1
                             err_name = type(eloop).__name__
                             run_stats["details"][err_name] = run_stats["details"].get(err_name, 0) + 1
+                            print(f"Worker {W_ID}: Error on case {itm['c_num']}: {err_name}", flush=True)
 
                     try:
                         p_res(itm, suc, blk, sd)
-                    except: pass
+                    except Exception as pe:
+                        print(f"Worker {W_ID}: DB Upsert Error on {itm['c_num']}: {pe}", flush=True)
                     
                     try: pg.goto(cfg["TARGET_URL"])
                     except: pass
@@ -240,12 +252,14 @@ def r_main():
                 elif "browser" in err_str or "context" in err_str: e_type = "BROWSER_CRASH"
                 else: e_type = type(em).__name__
                 run_stats["details"]["MAIN_" + e_type] = 1
+                print(f"Worker {W_ID} Main Loop Error: {e_type}", flush=True)
             finally: 
                 br.close()
                 
     except Exception as global_e:
         run_stats["error"] += 1
         run_stats["details"]["GLOBAL"] = str(global_e)[:50]
+        print(f"Worker {W_ID} Global Error: {global_e}", flush=True)
     
     try:
         db.table("run_logs").insert({
@@ -256,7 +270,9 @@ def r_main():
             "error_count": run_stats["error"],
             "errors_detail": run_stats["details"]
         }).execute()
-    except: pass
+        print(f"Worker {W_ID}: Successfully saved run_log to DB.", flush=True)
+    except Exception as log_e:
+        print(f"Worker {W_ID}: FAILED to save run_log to DB. Error: {log_e}", flush=True)
 
 if __name__ == "__main__":
     r_main()
