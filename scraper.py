@@ -174,6 +174,7 @@ def r_main():
                 for itm in rps:
                     if time.time() - st > M_TIME: break
                     run_stats["total"] += 1
+                    print(f"Worker {W_ID} checking case {itm['c_num']}", flush=True)
                     suc = False
                     blk = False
                     sd = {}
