@@ -7,9 +7,9 @@ try:
     cfg = json.loads(os.environ.get("APP_SECRET", "{}"))
     db: Client = create_client(cfg["SUPABASE_URL"], cfg["SUPABASE_KEY"])
 except Exception as e:
-    print(f"INIT ERROR: {repr(e)}")
     sys.exit(1)
 
+# תוקן שם המשתנה כדי שהשרתים יקבלו את המספר שלהם מגיטהאב
 W_ID = int(os.environ.get("WORKER_ID", "0"))
 WR = cfg.get("WORKER_ROLES", {"CURRENT_MONTH": 5, "FORWARD_OLD": 10, "HISTORY_UPDATE": 5})
 CR = WR.get("CURRENT_MONTH", 5)
@@ -138,7 +138,6 @@ def p_res(itm, suc, blk, dt):
 
 def r_main():
     run_stats = {"total": 0, "success": 0, "error": 0, "details": {}}
-    consecutive_errors = 0
     
     try:
         rps = g_fwd(True) if R == "C" else (g_fwd(False) if R == "F" else g_hst())
@@ -171,14 +170,9 @@ def r_main():
                 f1, f2, f3, f4, f6, f7, f8, f9, f10 = cfg.get("F_1","1"), cfg.get("F_2","2"), cfg.get("F_3","3"), cfg.get("F_4","4"), cfg.get("F_6","6"), cfg.get("F_7","7"), cfg.get("F_8","8"), cfg.get("F_9","9"), cfg.get("F_10","10")
                 ak1, ak2, ak3, ak4, ak5 = cfg.get("API_K1","k1"), cfg.get("API_K2","k2"), cfg.get("API_K3","k3"), cfg.get("API_K4","k4"), cfg.get("API_K5","k5")
                 s1, s2, s3, s4, s5 = cfg.get("SEL_1",""), cfg.get("SEL_2",""), cfg.get("SEL_3",""), cfg.get("SEL_4",""), cfg.get("SEL_5","")
-                err_msg_text = cfg.get("TXT_ERR_MSG", "ERROR_NOT_FOUND_TXT")
                 
                 for itm in rps:
                     if time.time() - st > M_TIME: break
-                    if consecutive_errors >= 5:
-                        run_stats["details"]["EARLY_EXIT_BLOCK"] = 1
-                        break
-                        
                     run_stats["total"] += 1
                     suc = False
                     blk = False
@@ -189,16 +183,8 @@ def r_main():
                         pg.locator(cfg["INPUT_B"]).fill(itm['m_y'])
                         pg.click(cfg["BTN_SUBMIT"])
                         
-                        try:
-                            pg.wait_for_selector(cfg["STORE_ID"], state="attached", timeout=15000)
-                        except Exception as we:
-                            try:
-                                pt = pg.content()
-                                if err_msg_text in pt:
-                                    blk = True
-                            except: pass
-                            raise we
-
+                        pg.wait_for_selector(cfg["STORE_ID"], state="attached", timeout=15000)
+                        
                         try:
                             sd[f1] = pg.locator(s1).inner_text().strip()
                             ttl = pg.locator(s2).get_attribute("title")
@@ -223,16 +209,11 @@ def r_main():
                                     sd[f7].append({f8: pt.get(ak3, ""), f9: pt.get(ak4, ""), f10: pt.get(ak5, "")})
                             suc = True
                             run_stats["success"] += 1
-                            consecutive_errors = 0
                             
                     except Exception as eloop:
-                        if blk:
-                            consecutive_errors = 0
-                        else:
-                            run_stats["error"] += 1
-                            consecutive_errors += 1
-                            err_name = type(eloop).__name__
-                            run_stats["details"][err_name] = run_stats["details"].get(err_name, 0) + 1
+                        run_stats["error"] += 1
+                        err_name = type(eloop).__name__
+                        run_stats["details"][err_name] = run_stats["details"].get(err_name, 0) + 1
 
                     try:
                         p_res(itm, suc, blk, sd)
