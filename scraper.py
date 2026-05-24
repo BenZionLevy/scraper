@@ -234,11 +234,12 @@ def r_main():
                             consecutive_errors += 1
                             err_name = type(eloop).__name__
                             run_stats["details"][err_name] = run_stats["details"].get(err_name, 0) + 1
+                            
                             try:
                                 debug_title = pg.title()
                                 print(f"Worker {W_ID}: Error on case {itm['c_num']}: {err_name}. Page Title seen: '{debug_title}'", flush=True)
                             except:
-                                print(f"Worker {W_ID}: Error on case {itm['c_num']}: {err_name}", flush=True)print(f"Worker {W_ID}: Error on case {itm['c_num']}: {err_name}", flush=True)
+                                print(f"Worker {W_ID}: Error on case {itm['c_num']}: {err_name}", flush=True)
 
                     try:
                         p_res(itm, suc, blk, sd)
