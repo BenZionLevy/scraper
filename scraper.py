@@ -77,9 +77,17 @@ def r_main():
     try:
         with sync_playwright() as p:
             br = p.chromium.launch(headless=True, args=["--disable-blink-features=AutomationControlled"])
-            cx = br.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36", viewport={"width": 1920, "height": 1080})
-            cx.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+            cx = br.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36", viewport={"width": 1920, "height": 1080})
+            
             pg = cx.new_page()
+            
+            # Stealth Injection
+            try:
+                from playwright_stealth import stealth_sync
+                stealth_sync(pg)
+            except Exception as e:
+                print(f"W_{W_ID}: Stealth failed to load: {e}", flush=True)
+
             pg.set_default_navigation_timeout(60000)
             
             try:
