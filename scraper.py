@@ -1,161 +1,83 @@
 import os, json, sys, time, random
 from datetime import datetime, timezone, timedelta
-from supabase import create_client, Client
+from supabase import create_client
 from playwright.sync_api import sync_playwright
 
 try:
     cfg = json.loads(os.environ.get("APP_SECRET", "{}"))
-    db: Client = create_client(cfg["SUPABASE_URL"], cfg["SUPABASE_KEY"])
+    db = create_client(cfg["SUPABASE_URL"], cfg["SUPABASE_KEY"])
 except Exception as e:
-    print(f"INIT ERROR: {e}")
+    print(f"INIT ERR: {e}")
     sys.exit(1)
 
 W_ID = int(os.environ.get("WORKER_ID", "0"))
 WR = cfg.get("WORKER_ROLES", {"CURRENT_MONTH": 5, "FORWARD_OLD": 10, "HISTORY_UPDATE": 5})
-CR = WR.get("CURRENT_MONTH", 5)
-FW = WR.get("FORWARD_OLD", 10)
+CR, FW = WR.get("CURRENT_MONTH", 5), WR.get("FORWARD_OLD", 10)
 R = "C" if W_ID < CR else ("F" if W_ID < CR + FW else "H")
-M_TIME = 3 * 60
+M_TIME = 3 * 60 # שונה ל-3 דקות
 
-def g_t():
-    return datetime.now(timezone(timedelta(hours=3))).strftime("%Y-%m-%d %H:%M:%S")
+def g_t(): return datetime.now(timezone(timedelta(hours=3))).strftime("%Y-%m-%d %H:%M:%S")
 
 def g_max(my):
     try:
-        tp = cfg.get("TXT_PRIV", "PRIV")
-        tpd = cfg.get("TXT_PENDING", "PEND")
-        r = db.table("cases").select("case_num").eq("month_year", my).neq("status", tp).neq("status", tpd).order("case_num", desc=True).limit(1).execute()
+        r = db.table("cases").select("case_num").eq("month_year", my).neq("status", cfg.get("TXT_PRIV", "PRIV")).neq("status", cfg.get("TXT_PENDING", "PEND")).order("case_num", desc=True).limit(1).execute()
         return r.data[0]['case_num'] if r.data else 0
     except: return 0
 
 def g_fwd(isc):
-    mls = [cfg["CURRENT_MONTH_STR"]] if isc else cfg.get("MONTHS_TO_SCAN", [])
-    trgs = []
-    gl = cfg.get("GAP_LIMIT", 400)
-    
+    mls, trgs, gl = [cfg["CURRENT_MONTH_STR"]] if isc else cfg.get("MONTHS_TO_SCAN", []), [], cfg.get("GAP_LIMIT", 400)
     for my in mls:
-        mr = g_max(my)
-        ex = []
-        st_idx = 0
+        mr, ex, st_idx = g_max(my), set(), 0
         while True:
             r = db.table("cases").select("case_num").eq("month_year", my).range(st_idx, st_idx+999).execute()
             if not r.data: break
-            ex.extend([x['case_num'] for x in r.data])
+            ex.update(x['case_num'] for x in r.data)
             st_idx += 1000
-        ex = set(ex)
-        
-        group_size = CR if isc else FW
-        offset = W_ID if isc else (W_ID - CR)
-        
-        if group_size == 0: continue
-        
-        for i in range(1, mr + gl + 1):
-            if i not in ex:
-                if (i + int(my)) % group_size == offset:
-                    trgs.append({"c_id": f"{i}-{my[:2]}-{my[2:]}", "c_num": i, "m_y": my})
-    
+        gs, offset = (CR, W_ID) if isc else (FW, W_ID - CR)
+        if gs == 0: continue
+        trgs.extend({"c_id": f"{i}-{my[:2]}-{my[2:]}", "c_num": i, "m_y": my} for i in range(1, mr + gl + 1) if i not in ex and (i + int(my)) % gs == offset)
     random.shuffle(trgs)
     return trgs
 
 def g_hst():
-    to = cfg.get("TXT_OPEN", "OPEN")
-    tpd = cfg.get("TXT_PENDING", "PEND")
-    trgs = []
-    st_idx = 0
-    group_size = WR.get("HISTORY_UPDATE", 5)
-    offset = W_ID - CR - FW
-    
-    if group_size == 0: return trgs
-    
+    trgs, st_idx, gs, offset = [], 0, WR.get("HISTORY_UPDATE", 5), W_ID - CR - FW
+    if gs == 0: return trgs
     while True:
-        r = db.table("cases").select("case_id, case_num, month_year, status, data_json").in_("status", [to, tpd]).range(st_idx, st_idx+999).execute()
+        r = db.table("cases").select("case_id,case_num,month_year,status,data_json").in_("status", [cfg.get("TXT_OPEN", "OPEN"), cfg.get("TXT_PENDING", "PEND")]).range(st_idx, st_idx+999).execute()
         if not r.data: break
-        for d in r.data:
-            hid = int(d['case_id'].replace("-", ""))
-            if hid % group_size == offset:
-                trgs.append({"c_id": d['case_id'], "c_num": d['case_num'], "m_y": d['month_year'], "db_d": d})
+        trgs.extend({"c_id": d['case_id'], "c_num": d['case_num'], "m_y": d['month_year'], "db_d": d} for d in r.data if int(d['case_id'].replace("-", "")) % gs == offset)
         st_idx += 1000
-        
     random.shuffle(trgs)
     return trgs
 
 def p_res(itm, suc, blk, dt):
-    cid = itm['c_id']
-    nw = g_t()
-    to = cfg.get("TXT_OPEN", "OPEN")
-    tp = cfg.get("TXT_PRIV", "PRIV")
-    tpd = cfg.get("TXT_PENDING", "PEND")
-    te = cfg.get("TXT_ERR", "E")
-    gl = cfg.get("GAP_LIMIT", 400)
-    isc = itm['m_y'] == cfg.get("CURRENT_MONTH_STR")
-    f5 = cfg.get("F_5", "5")
-    
+    cid, nw, to, tp, tpd, te, isc = itm['c_id'], g_t(), cfg.get("TXT_OPEN", "OPEN"), cfg.get("TXT_PRIV", "PRIV"), cfg.get("TXT_PENDING", "PEND"), cfg.get("TXT_ERR", "E"), itm['m_y'] == cfg.get("CURRENT_MONTH_STR")
     sk = int(f"{itm['m_y'][2:]}{itm['m_y'][:2]}{itm['c_num']:05d}")
     
-    if R in ["C", "F"]: 
-        if suc:
-            st = dt.get(f5, to)
-        else:
-            if blk:
-                if isc:
-                    mr = g_max(itm['m_y'])
-                    st = tp if (mr - itm['c_num'] >= gl) else tpd
-                else:
-                    st = tp
-            else:
-                st = te
-        
-        if st == te: return 
-        
-        d = {"case_id": cid, "case_num": itm['c_num'], "month_year": itm['m_y'], "status": st, "data_json": dt if suc else {}, "last_checked": nw, "sort_key": sk}
-        db.table("cases").upsert(d).execute()
-
-    else: 
-        orw = itm['db_d']
-        ost = orw.get("status")
-        
+    if R in ["C", "F"]:
+        st = dt.get(cfg.get("F_5", "5"), to) if suc else (tp if (not isc or (g_max(itm['m_y']) - itm['c_num'] >= cfg.get("GAP_LIMIT", 400))) else tpd) if blk else te
+        if st != te: db.table("cases").upsert({"case_id": cid, "case_num": itm['c_num'], "month_year": itm['m_y'], "status": st, "data_json": dt if suc else {}, "last_checked": nw, "sort_key": sk}).execute()
+    else:
+        orw, ost = itm['db_d'], itm['db_d'].get("status")
         if not suc:
-            if ost == tpd and blk:
-                mr = g_max(itm['m_y'])
-                if mr - itm['c_num'] >= gl:
-                    db.table("cases").update({"status": tp, "last_checked": nw, "sort_key": sk}).eq("case_id", cid).execute()
-            return 
-        
-        ojn = orw.get("data_json", {})
-        chg = ojn != dt
-        hr = db.table("case_history").select("version_num").eq("case_id", cid).order("version_num", desc=True).limit(1).execute()
-        nv = (hr.data[0]['version_num'] + 1) if hr.data else 2
-        nst = dt.get(f5, to)
-        
-        if ost == tpd:
-            db.table("cases").update({"data_json": dt, "status": nst, "last_checked": nw, "sort_key": sk}).eq("case_id", cid).execute()
-        else:
-            if chg:
-                db.table("cases").update({"data_json": dt, "status": nst, "last_checked": nw, "sort_key": sk}).eq("case_id", cid).execute()
-                db.table("case_history").insert({"case_id": cid, "check_time": nw, "version_num": nv, "is_changed": True, "data_json": dt}).execute()
-            else:
-                db.table("case_history").insert({"case_id": cid, "check_time": nw, "version_num": nv - 1, "is_changed": False, "data_json": {}}).execute()
+            if ost == tpd and blk and (g_max(itm['m_y']) - itm['c_num'] >= cfg.get("GAP_LIMIT", 400)): db.table("cases").update({"status": tp, "last_checked": nw, "sort_key": sk}).eq("case_id", cid).execute()
+            return
+        chg, hr = orw.get("data_json", {}) != dt, db.table("case_history").select("version_num").eq("case_id", cid).order("version_num", desc=True).limit(1).execute()
+        nv, nst = (hr.data[0]['version_num'] + 1) if hr.data else 2, dt.get(cfg.get("F_5", "5"), to)
+        db.table("cases").update({"data_json": dt, "status": nst, "last_checked": nw, "sort_key": sk}).eq("case_id", cid).execute()
+        if ost != tpd: db.table("case_history").insert({"case_id": cid, "check_time": nw, "version_num": nv if chg else nv - 1, "is_changed": chg, "data_json": dt if chg else {}}).execute()
 
 def r_main():
-    run_stats = {"total": 0, "success": 0, "error": 0, "details": {}}
-    consecutive_errors = 0
-    
-    try:
-        rps = g_fwd(True) if R == "C" else (g_fwd(False) if R == "F" else g_hst())
-    except Exception as e:
-        print(f"Worker {W_ID} Init DB Error: {e}", flush=True)
-        return
-        
-    if not rps: 
-        print(f"Worker {W_ID}: No targets to check. Exiting.", flush=True)
-        return
+    rs, cerr = {"total": 0, "success": 0, "error": 0, "details": {}}, 0
+    try: rps = g_fwd(True) if R == "C" else (g_fwd(False) if R == "F" else g_hst())
+    except Exception as e: return print(f"W_{W_ID} DB Err: {e}")
+    if not rps: return print(f"W_{W_ID}: No targets")
 
     st = time.time()
-    
     try:
         with sync_playwright() as p:
             br = p.chromium.launch(headless=True, args=["--disable-blink-features=AutomationControlled"])
-            cx = br.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36", viewport={"width": 1920, "height": 1080})
+            cx = br.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36", viewport={"width": 1920, "height": 1080})
             cx.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
             pg = cx.new_page()
             pg.set_default_navigation_timeout(60000)
@@ -164,120 +86,60 @@ def r_main():
                 pg.goto(cfg["TARGET_URL"])
                 try: pg.get_by_role("button", name=cfg.get("BTN_TXT", "btn")).click(timeout=8000)
                 except: pass
-                time.sleep(1)
                 
-                f1, f2, f3, f4, f6, f7, f8, f9, f10 = cfg.get("F_1","1"), cfg.get("F_2","2"), cfg.get("F_3","3"), cfg.get("F_4","4"), cfg.get("F_6","6"), cfg.get("F_7","7"), cfg.get("F_8","8"), cfg.get("F_9","9"), cfg.get("F_10","10")
-                ak1, ak2, ak3, ak4, ak5 = cfg.get("API_K1","k1"), cfg.get("API_K2","k2"), cfg.get("API_K3","k3"), cfg.get("API_K4","k4"), cfg.get("API_K5","k5")
-                s1, s2, s3, s4, s5 = cfg.get("SEL_1",""), cfg.get("SEL_2",""), cfg.get("SEL_3",""), cfg.get("SEL_4",""), cfg.get("SEL_5","")
-                err_msg_text = cfg.get("TXT_ERR_MSG", "שגיאה במספר תיק")
-                
+                err_txt = cfg.get("TXT_ERR_MSG", "שגיאה במספר תיק")
                 for itm in rps:
-                    if time.time() - st > M_TIME: break
-                    if consecutive_errors >= 5:
-                        print(f"Worker {W_ID}: 5 consecutive errors. Stopping to save log.", flush=True)
-                        break
-                        
-                    run_stats["total"] += 1
-                    print(f"Worker {W_ID} checking case {itm['c_num']} (Month: {itm['m_y']})", flush=True)
-                    suc = False
-                    blk = False
-                    sd = {}
+                    if time.time() - st > M_TIME or cerr >= 5: break
+                    rs["total"] += 1
+                    print(f"W_{W_ID} check {itm['c_num']} (M:{itm['m_y']})", flush=True)
+                    suc, blk, sd = False, False, {}
                     
                     try:
                         pg.locator(cfg["INPUT_A"]).fill(str(itm['c_num']))
                         pg.locator(cfg["INPUT_B"]).fill(itm['m_y'])
                         pg.click(cfg["BTN_SUBMIT"])
                         
-                        try:
-                            pg.wait_for_selector(cfg["STORE_ID"], state="attached", timeout=15000)
+                        try: pg.wait_for_selector(cfg["STORE_ID"], state="attached", timeout=15000)
                         except Exception as we:
-                            try:
-                                pt = pg.content()
-                                if err_msg_text in pt:
-                                    blk = True
-                                    print(f"Worker {W_ID}: Case {itm['c_num']} identified as NOT FOUND (Blocked/Privileged).", flush=True)
+                            try: blk = err_txt in pg.content()
                             except: pass
                             raise we
                         
                         try:
-                            sd[f1] = pg.locator(s1).inner_text().strip()
-                            ttl = pg.locator(s2).get_attribute("title")
-                            sd[f2] = ttl if ttl else pg.locator(s2).inner_text().strip()
-                            sd[f3] = pg.locator(s3).inner_text().strip()
-                            sd[f4] = pg.locator(s4).inner_text().strip()
+                            sd[cfg.get("F_1","1")] = pg.locator(cfg.get("SEL_1","")).inner_text().strip()
+                            sd[cfg.get("F_2","2")] = pg.locator(cfg.get("SEL_2","")).get_attribute("title") or pg.locator(cfg.get("SEL_2","")).inner_text().strip()
+                            sd[cfg.get("F_3","3")] = pg.locator(cfg.get("SEL_3","")).inner_text().strip()
+                            sd[cfg.get("F_4","4")] = pg.locator(cfg.get("SEL_4","")).inner_text().strip()
                         except: pass
 
                         jds = pg.locator(cfg["STORE_ID"]).get_attribute("value")
                         if jds and jds != "[]":
                             ci = json.loads(jds)[0]
-                            sd[cfg.get("F_5", "5")] = ci.get(ak1, cfg.get("TXT_NO_STAT", "N/A"))
-                            sd[f6] = ci.get(ak2, "")
-                            sd[f7] = []
-                            
-                            pg.evaluate(cfg["POSTBACK_ACTION"])
-                            pg.wait_for_selector(s5, state="attached", timeout=10000)
-                            pjs = pg.locator(s5).get_attribute("value")
-                            
-                            if pjs:
-                                for pt in json.loads(pjs):
-                                    sd[f7].append({f8: pt.get(ak3, ""), f9: pt.get(ak4, ""), f10: pt.get(ak5, "")})
-                            suc = True
-                            run_stats["success"] += 1
-                            consecutive_errors = 0
-                            print(f"Worker {W_ID}: Case {itm['c_num']} processed SUCCESS.", flush=True)
-                            
+                            sd[cfg.get("F_5","5")] = ci.get(cfg.get("API_K1","k1"), cfg.get("TXT_NO_STAT", "N/A"))
+                            sd[cfg.get("F_6","6")] = ci.get(cfg.get("API_K2","k2"), "")
+                            sd[cfg.get("F_7","7")] = []
+                            pg.evaluate(cfg.get("POSTBACK_ACTION", "doPostBack()"))
+                            pg.wait_for_selector(cfg.get("SEL_5",""), state="attached", timeout=10000)
+                            pjs = pg.locator(cfg.get("SEL_5","")).get_attribute("value")
+                            if pjs: sd[cfg.get("F_7","7")] = [{cfg.get("F_8","8"): pt.get(cfg.get("API_K3","k3"), ""), cfg.get("F_9","9"): pt.get(cfg.get("API_K4","k4"), ""), cfg.get("F_10","10"): pt.get(cfg.get("API_K5","k5"), "")} for pt in json.loads(pjs)]
+                            suc, cerr = True, 0
                     except Exception as eloop:
-                        if blk:
-                            consecutive_errors = 0
+                        if blk: cerr = 0
                         else:
-                            run_stats["error"] += 1
-                            consecutive_errors += 1
-                            err_name = type(eloop).__name__
-                            run_stats["details"][err_name] = run_stats["details"].get(err_name, 0) + 1
-                            
-                            try:
-                                debug_title = pg.title()
-                                print(f"Worker {W_ID}: Error on case {itm['c_num']}: {err_name}. Page Title seen: '{debug_title}'", flush=True)
-                            except:
-                                print(f"Worker {W_ID}: Error on case {itm['c_num']}: {err_name}", flush=True)
-
-                    try:
-                        p_res(itm, suc, blk, sd)
-                    except Exception as pe:
-                        print(f"Worker {W_ID}: DB Upsert Error on {itm['c_num']}: {pe}", flush=True)
-                    
+                            rs["error"], cerr, ename = rs["error"] + 1, cerr + 1, type(eloop).__name__
+                            rs["details"][ename] = rs["details"].get(ename, 0) + 1
+                            try: print(f"W_{W_ID} Err: {ename}. Title: '{pg.title()}'\nTXT: {' '.join(pg.locator('body').inner_text().split())[:300]}...", flush=True)
+                            except: pass
+                    try: p_res(itm, suc, blk, sd)
+                    except: pass
                     try: pg.goto(cfg["TARGET_URL"])
                     except: pass
-                    time.sleep(1)
             except Exception as em:
-                run_stats["error"] += 1
-                err_str = str(em).lower()
-                if "timeout" in err_str: e_type = "TIMEOUT"
-                elif "locator" in err_str or "selector" in err_str: e_type = "ELEMENT_MISSING"
-                elif "browser" in err_str or "context" in err_str: e_type = "BROWSER_CRASH"
-                else: e_type = type(em).__name__
-                run_stats["details"]["MAIN_" + e_type] = 1
-                print(f"Worker {W_ID} Main Loop Error: {e_type}", flush=True)
-            finally: 
-                br.close()
-                
-    except Exception as global_e:
-        run_stats["error"] += 1
-        run_stats["details"]["GLOBAL"] = str(global_e)[:50]
-        print(f"Worker {W_ID} Global Error: {global_e}", flush=True)
-    
-    try:
-        db.table("run_logs").insert({
-            "worker_id": W_ID,
-            "role": R,
-            "total_checked": run_stats["total"],
-            "success_count": run_stats["success"],
-            "error_count": run_stats["error"],
-            "errors_detail": run_stats["details"]
-        }).execute()
-        print(f"Worker {W_ID}: Successfully saved run_log to DB.", flush=True)
-    except Exception as log_e:
-        print(f"Worker {W_ID}: FAILED to save run_log to DB. Error: {log_e}", flush=True)
+                rs["error"] += 1
+                rs["details"]["MAIN_ERR"] = type(em).__name__
+            finally: br.close()
+    except Exception as ge: rs["error"], rs["details"]["GLOBAL"] = rs["error"] + 1, str(ge)[:50]
+    try: db.table("run_logs").insert({"worker_id": W_ID, "role": R, "total_checked": rs["total"], "success_count": rs["success"], "error_count": rs["error"], "errors_detail": rs["details"]}).execute()
+    except: pass
 
-if __name__ == "__main__":
-    r_main()
+if __name__ == "__main__": r_main()
