@@ -28,7 +28,7 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install supabase playwright tzdata
+        pip install supabase playwright tzdata playwright-stealth
         playwright install chromium
 
     - name: Run script
