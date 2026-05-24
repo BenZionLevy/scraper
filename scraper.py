@@ -1,7 +1,7 @@
 import os, json, sys, time, random
 from datetime import datetime, timezone, timedelta
 from supabase import create_client
-from playwright.sync_api import sync_playwright
+from DrissionPage import ChromiumPage, ChromiumOptions
 
 try:
     cfg = json.loads(os.environ.get("APP_SECRET", "{}"))
@@ -66,24 +66,6 @@ def p_res(itm, suc, blk, dt):
         db.table("cases").update({"data_json": dt, "status": nst, "last_checked": nw, "sort_key": sk}).eq("case_id", cid).execute()
         if ost != tpd: db.table("case_history").insert({"case_id": cid, "check_time": nw, "version_num": nv if chg else nv - 1, "is_changed": chg, "data_json": dt if chg else {}}).execute()
 
-def kill_popups(pg):
-    # קוד אגרסיבי להעלמת פופ-אפים והודעות מערכת
-    try:
-        pg.evaluate("""() => {
-            const blockwords = ['modal', 'popup', 'dialog', 'overlay', 'backdrop', 'alert', 'message'];
-            document.querySelectorAll('*').forEach(el => {
-                const cn = (el.className || '').toLowerCase();
-                const id = (el.id || '').toLowerCase();
-                if (blockwords.some(w => cn.includes(w) || id.includes(w)) || window.getComputedStyle(el).zIndex > 100) {
-                    el.style.display = 'none';
-                    el.style.visibility = 'hidden';
-                    el.style.opacity = '0';
-                    el.style.pointerEvents = 'none';
-                }
-            });
-        }""")
-    except: pass
-
 def r_main():
     rs, cerr = {"total": 0, "success": 0, "error": 0, "details": {}}, 0
     try: rps = g_fwd(True) if R == "C" else (g_fwd(False) if R == "F" else g_hst())
@@ -91,74 +73,81 @@ def r_main():
     if not rps: return print(f"W_{W_ID}: No targets")
 
     st = time.time()
+    page = None
     try:
-        with sync_playwright() as p:
-            br = p.chromium.launch(headless=True, args=["--disable-blink-features=AutomationControlled"])
-            cx = br.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
-            cx.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
-            pg = cx.new_page()
-            pg.set_default_navigation_timeout(60000)
+        co = ChromiumOptions()
+        co.headless(False) # חשוב להסוואה: אנחנו מריצים לא-Headless בתוך מסך וירטואלי
+        co.set_argument('--no-sandbox')
+        co.set_argument('--window-size=1920,1080')
+        page = ChromiumPage(co)
+        page.set.timeouts(base=15, page_load=60)
+        
+        try:
+            page.get(cfg["TARGET_URL"])
+            try: page.ele(f"text={cfg.get('BTN_TXT', 'חיפוש')}").click()
+            except: pass
             
-            try:
-                pg.goto(cfg["TARGET_URL"])
-                kill_popups(pg) # מחסל פופ-אפים מיד בכניסה לאתר
+            err_txt = cfg.get("TXT_ERR_MSG", "שגיאה במספר תיק")
+            for itm in rps:
+                if time.time() - st > M_TIME or cerr >= 5: break
+                rs["total"] += 1
+                print(f"W_{W_ID} check {itm['c_num']} (M:{itm['m_y']})", flush=True)
+                suc, blk, sd = False, False, {}
                 
-                try: pg.get_by_role("button", name=cfg.get("BTN_TXT", "btn")).click(timeout=8000)
-                except: pass
-                
-                err_txt = cfg.get("TXT_ERR_MSG", "שגיאה במספר תיק")
-                for itm in rps:
-                    if time.time() - st > M_TIME or cerr >= 5: break
-                    rs["total"] += 1
-                    print(f"W_{W_ID} check {itm['c_num']} (M:{itm['m_y']})", flush=True)
-                    suc, blk, sd = False, False, {}
+                try:
+                    page.ele(cfg["INPUT_A"]).clear()
+                    page.ele(cfg["INPUT_A"]).input(str(itm['c_num']))
+                    page.ele(cfg["INPUT_B"]).clear()
+                    page.ele(cfg["INPUT_B"]).input(itm['m_y'])
+                    page.ele(cfg["BTN_SUBMIT"]).click()
+                    
+                    try: 
+                        if not page.wait.ele_loaded(cfg["STORE_ID"], timeout=15):
+                            raise Exception("Timeout_Store_ID")
+                    except Exception as we:
+                        try: blk = err_txt in page.html
+                        except: pass
+                        raise we
                     
                     try:
-                        kill_popups(pg) # מוודא שאין פופ-אפ לפני ההקלדה
-                        
-                        # לחיצה כפויה על השדות גם אם משהו מסתיר אותם
-                        pg.locator(cfg["INPUT_A"]).fill(str(itm['c_num']), force=True)
-                        pg.locator(cfg["INPUT_B"]).fill(itm['m_y'], force=True)
-                        pg.locator(cfg["BTN_SUBMIT"]).click(force=True)
-                        
-                        try: pg.wait_for_selector(cfg["STORE_ID"], state="attached", timeout=15000)
-                        except Exception as we:
-                            try: blk = err_txt in pg.content()
-                            except: pass
-                            raise we
-                        
-                        try:
-                            sd[cfg.get("F_1","1")] = pg.locator(cfg.get("SEL_1","")).inner_text().strip()
-                            sd[cfg.get("F_2","2")] = pg.locator(cfg.get("SEL_2","")).get_attribute("title") or pg.locator(cfg.get("SEL_2","")).inner_text().strip()
-                            sd[cfg.get("F_3","3")] = pg.locator(cfg.get("SEL_3","")).inner_text().strip()
-                            sd[cfg.get("F_4","4")] = pg.locator(cfg.get("SEL_4","")).inner_text().strip()
-                        except: pass
+                        sd[cfg.get("F_1","1")] = page.ele(cfg.get("SEL_1","")).text.strip()
+                        sd[cfg.get("F_2","2")] = page.ele(cfg.get("SEL_2","")).attr("title") or page.ele(cfg.get("SEL_2","")).text.strip()
+                        sd[cfg.get("F_3","3")] = page.ele(cfg.get("SEL_3","")).text.strip()
+                        sd[cfg.get("F_4","4")] = page.ele(cfg.get("SEL_4","")).text.strip()
+                    except: pass
 
-                        jds = pg.locator(cfg["STORE_ID"]).get_attribute("value")
-                        if jds and jds != "[]":
-                            ci = json.loads(jds)[0]
-                            sd[cfg.get("F_5","5")] = ci.get(cfg.get("API_K1","k1"), cfg.get("TXT_NO_STAT", "N/A"))
-                            sd[cfg.get("F_6","6")] = ci.get(cfg.get("API_K2","k2"), "")
-                            sd[cfg.get("F_7","7")] = []
-                            pg.evaluate(cfg.get("POSTBACK_ACTION", "doPostBack()"))
-                            pg.wait_for_selector(cfg.get("SEL_5",""), state="attached", timeout=10000)
-                            pjs = pg.locator(cfg.get("SEL_5","")).get_attribute("value")
-                            if pjs: sd[cfg.get("F_7","7")] = [{cfg.get("F_8","8"): pt.get(cfg.get("API_K3","k3"), ""), cfg.get("F_9","9"): pt.get(cfg.get("API_K4","k4"), ""), cfg.get("F_10","10"): pt.get(cfg.get("API_K5","k5"), "")} for pt in json.loads(pjs)]
-                            suc, cerr = True, 0
-                    except Exception as eloop:
-                        if blk: cerr = 0
-                        else:
-                            rs["error"], cerr, ename = rs["error"] + 1, cerr + 1, type(eloop).__name__
-                            print(f"W_{W_ID} Err: {ename}", flush=True)
-                    try: p_res(itm, suc, blk, sd)
-                    except: pass
-                    try: pg.goto(cfg["TARGET_URL"])
-                    except: pass
-            except Exception as em:
-                rs["error"] += 1
-                rs["details"]["MAIN_ERR"] = type(em).__name__
-            finally: br.close()
+                    jds = page.ele(cfg["STORE_ID"]).attr("value")
+                    if jds and jds != "[]":
+                        ci = json.loads(jds)[0]
+                        sd[cfg.get("F_5","5")] = ci.get(cfg.get("API_K1","k1"), cfg.get("TXT_NO_STAT", "N/A"))
+                        sd[cfg.get("F_6","6")] = ci.get(cfg.get("API_K2","k2"), "")
+                        sd[cfg.get("F_7","7")] = []
+                        page.run_js(cfg.get("POSTBACK_ACTION", "doPostBack()"))
+                        page.wait.ele_loaded(cfg.get("SEL_5",""), timeout=10)
+                        pjs = page.ele(cfg.get("SEL_5","")).attr("value")
+                        if pjs: sd[cfg.get("F_7","7")] = [{cfg.get("F_8","8"): pt.get(cfg.get("API_K3","k3"), ""), cfg.get("F_9","9"): pt.get(cfg.get("API_K4","k4"), ""), cfg.get("F_10","10"): pt.get(cfg.get("API_K5","k5"), "")} for pt in json.loads(pjs)]
+                        suc, cerr = True, 0
+                except Exception as eloop:
+                    if blk: cerr = 0
+                    else:
+                        rs["error"], cerr, ename = rs["error"] + 1, cerr + 1, type(eloop).__name__
+                        try:
+                            b64_bytes = page.get_screenshot(as_base64=True)
+                            b64 = f"data:image/jpeg;base64,{b64_bytes}"
+                            db.table("run_logs").insert({"worker_id": W_ID, "role": R, "errors_detail": {"screenshot": b64}}).execute()
+                            print(f"W_{W_ID}: SCREENSHOT SAVED TO DB!", flush=True)
+                        except: pass
+                        print(f"W_{W_ID} Err: {ename}", flush=True)
+                try: p_res(itm, suc, blk, sd)
+                except: pass
+                try: page.get(cfg["TARGET_URL"])
+                except: pass
+        except Exception as em:
+            rs["error"] += 1
+            rs["details"]["MAIN_ERR"] = type(em).__name__
     except Exception as ge: rs["error"], rs["details"]["GLOBAL"] = rs["error"] + 1, str(ge)[:50]
+    finally:
+        if page: page.quit()
     try: db.table("run_logs").insert({"worker_id": W_ID, "role": R, "total_checked": rs["total"], "success_count": rs["success"], "error_count": rs["error"], "errors_detail": rs["details"]}).execute()
     except: pass
 
