@@ -127,23 +127,20 @@ def r_main():
                         if blk: cerr = 0
                         else:
                             rs["error"], cerr, ename = rs["error"] + 1, cerr + 1, type(eloop).__name__
-                            rs["details"][ename] = rs["details"].get(ename, 0) + 1
                             try:
-                                if "screenshot" not in rs["details"]:
-                                    shot = pg.screenshot(type="jpeg", quality=40)
-                                    rs["details"]["screenshot"] = "data:image/jpeg;base64," + base64.b64encode(shot).decode('utf-8')
-                            except: pass
+                                shot = pg.screenshot(type="jpeg", quality=40)
+                                b64 = "data:image/jpeg;base64," + base64.b64encode(shot).decode('utf-8')
+                                db.table("run_logs").insert({"worker_id": W_ID, "role": R, "errors_detail": {"screenshot": b64}}).execute()
+                                print(f"W_{W_ID}: SCREENSHOT SAVED TO DB!", flush=True)
+                            except Exception as e_db:
+                                print(f"W_{W_ID}: FAILED TO SAVE SCREENSHOT: {e_db}", flush=True)
                             print(f"W_{W_ID} Err: {ename}", flush=True)
                     try: p_res(itm, suc, blk, sd)
                     except: pass
                     try: pg.goto(cfg["TARGET_URL"])
                     except: pass
-            except Exception as em:
-                rs["error"] += 1
-                rs["details"]["MAIN_ERR"] = type(em).__name__
+            except Exception: pass
             finally: br.close()
-    except Exception as ge: rs["error"], rs["details"]["GLOBAL"] = rs["error"] + 1, str(ge)[:50]
-    try: db.table("run_logs").insert({"worker_id": W_ID, "role": R, "total_checked": rs["total"], "success_count": rs["success"], "error_count": rs["error"], "errors_detail": rs["details"]}).execute()
-    except: pass
+    except Exception: pass
 
 if __name__ == "__main__": r_main()
