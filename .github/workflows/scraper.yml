@@ -28,10 +28,13 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install supabase playwright tzdata
-        playwright install chromium
+        pip install supabase tzdata DrissionPage
+        sudo apt-get update
+        sudo apt-get install xvfb -y
+        wget https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
+        sudo apt install ./google-chrome-stable_current_amd64.deb -y
 
     - name: Run script
       env:
         APP_SECRET: ${{ secrets.APP_SECRET }}
-      run: python -u scraper.py
+      run: xvfb-run -a python -u scraper.py
