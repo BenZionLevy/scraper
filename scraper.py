@@ -1,7 +1,10 @@
 import os, json, sys, time, random, base64
 from datetime import datetime, timezone, timedelta
 from supabase import create_client
-from playwright.sync_api import sync_playwright
+import undetected_chromedriver as uc
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
 
 try:
     cfg = json.loads(os.environ.get("APP_SECRET", "{}"))
@@ -53,7 +56,6 @@ def g_hst():
 def p_res(itm, suc, blk, dt):
     cid, nw, to, tp, tpd, te, isc = itm['c_id'], g_t(), cfg.get("TXT_OPEN", "OPEN"), cfg.get("TXT_PRIV", "PRIV"), cfg.get("TXT_PENDING", "PEND"), cfg.get("TXT_ERR", "E"), itm['m_y'] == cfg.get("CURRENT_MONTH_STR")
     sk = int(f"{itm['m_y'][2:]}{itm['m_y'][:2]}{itm['c_num']:05d}")
-    
     if R in ["C", "F"]:
         st = dt.get(cfg.get("F_5", "5"), to) if suc else (tp if (not isc or (g_max(itm['m_y']) - itm['c_num'] >= cfg.get("GAP_LIMIT", 400))) else tpd) if blk else te
         if st != te: db.table("cases").upsert({"case_id": cid, "case_num": itm['c_num'], "month_year": itm['m_y'], "status": st, "data_json": dt if suc else {}, "last_checked": nw, "sort_key": sk}).execute()
@@ -74,81 +76,82 @@ def r_main():
     if not rps: return print(f"W_{W_ID}: No targets")
 
     st = time.time()
+    driver = None
     try:
-        with sync_playwright() as p:
-            br = p.chromium.launch(headless=True, args=["--disable-blink-features=AutomationControlled"])
-            cx = br.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36", viewport={"width": 1920, "height": 1080})
+        options = uc.ChromeOptions()
+        options.add_argument('--no-sandbox')
+        options.add_argument('--window-size=1920,1080')
+        driver = uc.Chrome(options=options, headless=False)
+        driver.set_page_load_timeout(60)
+        
+        try:
+            driver.get(cfg["TARGET_URL"])
+            time.sleep(2)
+            try: driver.find_element(By.XPATH, f"//button[contains(text(), '{cfg.get('BTN_TXT', 'btn')}')]").click()
+            except: pass
             
-            pg = cx.new_page()
+            err_txt = cfg.get("TXT_ERR_MSG", "שגיאה במספר תיק")
             
-            # Stealth Injection
-            try:
-                from playwright_stealth import stealth_sync
-                stealth_sync(pg)
-            except Exception as e:
-                print(f"W_{W_ID}: Stealth failed to load: {e}", flush=True)
-
-            pg.set_default_navigation_timeout(60000)
-            
-            try:
-                pg.goto(cfg["TARGET_URL"])
-                try: pg.get_by_role("button", name=cfg.get("BTN_TXT", "btn")).click(timeout=8000)
-                except: pass
+            for itm in rps:
+                if time.time() - st > M_TIME or cerr >= 5: break
+                rs["total"] += 1
+                print(f"W_{W_ID} check {itm['c_num']} (M:{itm['m_y']})", flush=True)
+                suc, blk, sd = False, False, {}
                 
-                err_txt = cfg.get("TXT_ERR_MSG", "שגיאה במספר תיק")
-                for itm in rps:
-                    if time.time() - st > M_TIME or cerr >= 5: break
-                    rs["total"] += 1
-                    print(f"W_{W_ID} check {itm['c_num']} (M:{itm['m_y']})", flush=True)
-                    suc, blk, sd = False, False, {}
+                try:
+                    driver.find_element(By.CSS_SELECTOR, cfg["INPUT_A"]).clear()
+                    driver.find_element(By.CSS_SELECTOR, cfg["INPUT_A"]).send_keys(str(itm['c_num']))
+                    driver.find_element(By.CSS_SELECTOR, cfg["INPUT_B"]).clear()
+                    driver.find_element(By.CSS_SELECTOR, cfg["INPUT_B"]).send_keys(itm['m_y'])
+                    driver.find_element(By.CSS_SELECTOR, cfg["BTN_SUBMIT"]).click()
+                    
+                    try: 
+                        WebDriverWait(driver, 15).until(EC.presence_of_element_located((By.CSS_SELECTOR, cfg["STORE_ID"])))
+                    except Exception as we:
+                        try: blk = err_txt in driver.page_source
+                        except: pass
+                        raise we
                     
                     try:
-                        pg.locator(cfg["INPUT_A"]).fill(str(itm['c_num']))
-                        pg.locator(cfg["INPUT_B"]).fill(itm['m_y'])
-                        pg.click(cfg["BTN_SUBMIT"])
-                        
-                        try: pg.wait_for_selector(cfg["STORE_ID"], state="attached", timeout=15000)
-                        except Exception as we:
-                            try: blk = err_txt in pg.content()
-                            except: pass
-                            raise we
-                        
-                        try:
-                            sd[cfg.get("F_1","1")] = pg.locator(cfg.get("SEL_1","")).inner_text().strip()
-                            sd[cfg.get("F_2","2")] = pg.locator(cfg.get("SEL_2","")).get_attribute("title") or pg.locator(cfg.get("SEL_2","")).inner_text().strip()
-                            sd[cfg.get("F_3","3")] = pg.locator(cfg.get("SEL_3","")).inner_text().strip()
-                            sd[cfg.get("F_4","4")] = pg.locator(cfg.get("SEL_4","")).inner_text().strip()
-                        except: pass
+                        sd[cfg.get("F_1","1")] = driver.find_element(By.CSS_SELECTOR, cfg.get("SEL_1","")).text.strip()
+                        sd[cfg.get("F_2","2")] = driver.find_element(By.CSS_SELECTOR, cfg.get("SEL_2","")).get_attribute("title") or driver.find_element(By.CSS_SELECTOR, cfg.get("SEL_2","")).text.strip()
+                        sd[cfg.get("F_3","3")] = driver.find_element(By.CSS_SELECTOR, cfg.get("SEL_3","")).text.strip()
+                        sd[cfg.get("F_4","4")] = driver.find_element(By.CSS_SELECTOR, cfg.get("SEL_4","")).text.strip()
+                    except: pass
 
-                        jds = pg.locator(cfg["STORE_ID"]).get_attribute("value")
-                        if jds and jds != "[]":
-                            ci = json.loads(jds)[0]
-                            sd[cfg.get("F_5","5")] = ci.get(cfg.get("API_K1","k1"), cfg.get("TXT_NO_STAT", "N/A"))
-                            sd[cfg.get("F_6","6")] = ci.get(cfg.get("API_K2","k2"), "")
-                            sd[cfg.get("F_7","7")] = []
-                            pg.evaluate(cfg.get("POSTBACK_ACTION", "doPostBack()"))
-                            pg.wait_for_selector(cfg.get("SEL_5",""), state="attached", timeout=10000)
-                            pjs = pg.locator(cfg.get("SEL_5","")).get_attribute("value")
-                            if pjs: sd[cfg.get("F_7","7")] = [{cfg.get("F_8","8"): pt.get(cfg.get("API_K3","k3"), ""), cfg.get("F_9","9"): pt.get(cfg.get("API_K4","k4"), ""), cfg.get("F_10","10"): pt.get(cfg.get("API_K5","k5"), "")} for pt in json.loads(pjs)]
-                            suc, cerr = True, 0
-                    except Exception as eloop:
-                        if blk: cerr = 0
-                        else:
-                            rs["error"], cerr, ename = rs["error"] + 1, cerr + 1, type(eloop).__name__
-                            try:
-                                shot = pg.screenshot(type="jpeg", quality=40)
-                                b64 = "data:image/jpeg;base64," + base64.b64encode(shot).decode('utf-8')
-                                db.table("run_logs").insert({"worker_id": W_ID, "role": R, "errors_detail": {"screenshot": b64}}).execute()
-                                print(f"W_{W_ID}: SCREENSHOT SAVED TO DB!", flush=True)
-                            except Exception as e_db:
-                                print(f"W_{W_ID}: FAILED TO SAVE SCREENSHOT: {e_db}", flush=True)
-                            print(f"W_{W_ID} Err: {ename}", flush=True)
-                    try: p_res(itm, suc, blk, sd)
-                    except: pass
-                    try: pg.goto(cfg["TARGET_URL"])
-                    except: pass
-            except Exception: pass
-            finally: br.close()
-    except Exception: pass
+                    jds = driver.find_element(By.CSS_SELECTOR, cfg["STORE_ID"]).get_attribute("value")
+                    if jds and jds != "[]":
+                        ci = json.loads(jds)[0]
+                        sd[cfg.get("F_5","5")] = ci.get(cfg.get("API_K1","k1"), cfg.get("TXT_NO_STAT", "N/A"))
+                        sd[cfg.get("F_6","6")] = ci.get(cfg.get("API_K2","k2"), "")
+                        sd[cfg.get("F_7","7")] = []
+                        driver.execute_script(cfg.get("POSTBACK_ACTION", "doPostBack()"))
+                        WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.CSS_SELECTOR, cfg.get("SEL_5",""))))
+                        pjs = driver.find_element(By.CSS_SELECTOR, cfg.get("SEL_5","")).get_attribute("value")
+                        if pjs: sd[cfg.get("F_7","7")] = [{cfg.get("F_8","8"): pt.get(cfg.get("API_K3","k3"), ""), cfg.get("F_9","9"): pt.get(cfg.get("API_K4","k4"), ""), cfg.get("F_10","10"): pt.get(cfg.get("API_K5","k5"), "")} for pt in json.loads(pjs)]
+                        suc, cerr = True, 0
+                except Exception as eloop:
+                    if blk: cerr = 0
+                    else:
+                        rs["error"], cerr, ename = rs["error"] + 1, cerr + 1, type(eloop).__name__
+                        try:
+                            b64 = "data:image/png;base64," + driver.get_screenshot_as_base64()
+                            db.table("run_logs").insert({"worker_id": W_ID, "role": R, "errors_detail": {"screenshot": b64}}).execute()
+                            print(f"W_{W_ID}: SCREENSHOT SAVED TO DB!", flush=True)
+                        except Exception as e_db: pass
+                        print(f"W_{W_ID} Err: {ename}", flush=True)
+                try: p_res(itm, suc, blk, sd)
+                except: pass
+                try: driver.get(cfg["TARGET_URL"])
+                except: pass
+        except Exception as em:
+            rs["error"] += 1
+            rs["details"]["MAIN_ERR"] = type(em).__name__
+    except Exception as ge: rs["error"], rs["details"]["GLOBAL"] = rs["error"] + 1, str(ge)[:50]
+    finally:
+        if driver: driver.quit()
+        
+    try: db.table("run_logs").insert({"worker_id": W_ID, "role": R, "total_checked": rs["total"], "success_count": rs["success"], "error_count": rs["error"], "errors_detail": rs["details"]}).execute()
+    except: pass
 
 if __name__ == "__main__": r_main()
