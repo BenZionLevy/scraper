@@ -1,4 +1,4 @@
-import os, json, sys, time, random
+import os, json, sys, time, random, base64
 from datetime import datetime, timezone, timedelta
 from supabase import create_client
 from playwright.sync_api import sync_playwright
@@ -14,7 +14,7 @@ W_ID = int(os.environ.get("WORKER_ID", "0"))
 WR = cfg.get("WORKER_ROLES", {"CURRENT_MONTH": 5, "FORWARD_OLD": 10, "HISTORY_UPDATE": 5})
 CR, FW = WR.get("CURRENT_MONTH", 5), WR.get("FORWARD_OLD", 10)
 R = "C" if W_ID < CR else ("F" if W_ID < CR + FW else "H")
-M_TIME = 3 * 60 # שונה ל-3 דקות
+M_TIME = 3 * 60
 
 def g_t(): return datetime.now(timezone(timedelta(hours=3))).strftime("%Y-%m-%d %H:%M:%S")
 
@@ -128,8 +128,12 @@ def r_main():
                         else:
                             rs["error"], cerr, ename = rs["error"] + 1, cerr + 1, type(eloop).__name__
                             rs["details"][ename] = rs["details"].get(ename, 0) + 1
-                            try: print(f"W_{W_ID} Err: {ename}. Title: '{pg.title()}'\nTXT: {' '.join(pg.locator('body').inner_text().split())[:300]}...", flush=True)
+                            try:
+                                if "screenshot" not in rs["details"]:
+                                    shot = pg.screenshot(type="jpeg", quality=40)
+                                    rs["details"]["screenshot"] = "data:image/jpeg;base64," + base64.b64encode(shot).decode('utf-8')
                             except: pass
+                            print(f"W_{W_ID} Err: {ename}", flush=True)
                     try: p_res(itm, suc, blk, sd)
                     except: pass
                     try: pg.goto(cfg["TARGET_URL"])
