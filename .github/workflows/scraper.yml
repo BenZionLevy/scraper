@@ -28,9 +28,10 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install supabase tzdata undetected-chromedriver selenium
+        pip install supabase playwright tzdata
+        playwright install chromium
 
     - name: Run script
       env:
         APP_SECRET: ${{ secrets.APP_SECRET }}
-      run: xvfb-run python -u scraper.py
+      run: python -u scraper.py
